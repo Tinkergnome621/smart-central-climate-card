@@ -1,0 +1,24 @@
+{
+  "name": "smart-central-climate-card",
+  "version": "1.0.0",
+  "description": "Companion Lovelace card for Smart Central Climate Home Assistant integration",
+  "main": "smart-central-climate-card.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tinkergnome621/smart-central-climate-card.git"
+  },
+  "keywords": [
+    "home-assistant",
+    "homeassistant",
+    "lovelace",
+    "custom-card",
+    "climate",
+    "thermostat"
+  ],
+  "author": "Tinkergnome621",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Tinkergnome621/smart-central-climate-card/issues"
+  },
+  "homepage": "https://github.com/Tinkergnome621/smart-central-climate-card#readme"
+}
