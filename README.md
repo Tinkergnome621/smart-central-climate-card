@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="brand/logo.png" alt="Smart Central Climate Card Logo" width="480">
+</p>
+
 # Smart Central Climate Card 🎛️
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/default)
