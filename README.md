@@ -8,25 +8,29 @@ A dedicated, high-performance companion Lovelace card for the **[Smart Central C
 
 ---
 
-## ✨ Features
+## ✨ Features (v1.5.1 Redesign)
 
-* **Half-Circle Arc Gauge**: Smooth, tactile $180^\circ$ semi-circle arc slider with a draggable knob for effortless setpoint adjustments.
-* **Dynamic Mode Shift**:
-  * ❄️ **Cooling Mode**: Vibrant electric blue arc, glow, and diagnostics accents.
-  * 🔥 **Heating Mode**: Rich warm orange arc, glow, and heat pump telemetry.
-  * ⏸️ **Standby/Off**: Dim slate styling.
-* **Supply Air A/C Plenum Diagnostics Bar (5 Columns)**:
-  * 🌡️ **Plenum Temperature**: Real-time coil discharge temperature.
-  * 💧 **Plenum Humidity**: Evaporator coil condensation and dehumidification monitoring.
-  * ↕️ **$\Delta T$ (Thermal Split)**: Automatically calculated thermodynamic delta ($\text{House Temp} - \text{Plenum Temp}$) verifying optimal heat exchange.
-  * 🏠 **House Average**: Active reference room temperature.
-  * 🎯 **Wall Target & Offset**: Live wall thermostat setpoint with $-3^\circ\text{F}$ (Cool) / $+1^\circ\text{F}$ (Heat) calibration offsets.
-* **Hardware Quick Toggles**:
-  * 🌀 **Hallway Blower Fan** (`fan.hallway_thermostat`): Toggle between continuous whole-home filtration and automatic system calls, complete with animated spinning fan icon.
-  * ✈️ **Vacation Mode** (`switch.smart_central_a_c_vacation_mode`): One-tap deep setback ($82^\circ\text{F}$) with automatic schedule suspension.
-* **One-Tap Presets**: Direct buttons for **Comfort** ($72^\circ$), **Eco** ($76^\circ$), **Away** ($78^\circ$), **Sleep** ($69^\circ$), and **Boost** ($68^\circ$).
-* **System Telemetry**: Bottom status strip displaying active schedule slots and compressor anti-short-cycle delay.
-* **Graphical Card Editor**: Full visual configuration support inside Home Assistant's dashboard editor.
+![Smart Central Climate Card](https://raw.githubusercontent.com/Tinkergnome621/smart_central_climate/main/assets/circular_dual_thermostat_card_v5.jpg)
+
+* **Dual-Knob Circular Arc Dial**: Interactive circular arc gauge with dual draggable knobs for **Heat (orange)** and **Cool (sky blue)** setpoints with an **emerald deadband buffer**.
+* **Icon-Only Status Indicator**: Centered above the temperature inside the dial:
+  * 🟢 **Green thermometer**: System Idle in deadband
+  * ❄️ **Blue snowflake**: Active cooling
+  * 🔥 **Red flame**: Active heating
+  * ⚡ **Gray standby**: System Off
+* **Vertical Duct Plenum Stack (Left Column)**:
+  * 📥 **Return Air Intake (Input)**: Real-time duct return probe temperature and relative humidity (`68.2°F / 49% RH`).
+  * ⚡ **Delta-T Split Diagnostics**: Live temperature split across evaporator coils (`15.8°F Drop`) with dynamic `(Optimal)` badge.
+  * 📤 **Supply Air Output**: Live plenum duct probe monitoring (`52.4°F / 65% RH`).
+* **Minimalist Blower Fan Toggle**:
+  * Clean circular fan icon with `FAN ON` / `FAN OFF` label underneath.
+  * Rotating fan blades and sky blue glow when active. Tap to toggle directly on the card!
+* **Centered Target Range & Sensor Breakdown**:
+  * Positioned justified center below dial and stack.
+  * Shows target range (`64°F (Heat) — 74°F (Cool)`), Average House reading (`68.4°F / 48% RH`), and physical wall thermostat reading (`69.0°F / 45% RH`).
+* **One-Touch System Modes & Presets**:
+  * Modes: `Heat/Cool`, `Cool`, `Heat`, `Off`.
+  * Presets: `Eco`, `Comfort`, `Sleep`, `Away`, `Vacation`, and `Hold` (Manual).
 
 ---
 
