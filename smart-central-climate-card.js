@@ -1,5 +1,5 @@
 /**
- * Smart Central Climate Card (v1.5.2)
+ * Smart Central Climate Card (v1.5.3)
  * Custom Lovelace Card for Home Assistant
  * Designed for Central A/C and Heat Pump Dual-Setpoint Range Systems
  * 
@@ -582,7 +582,7 @@ class SmartCentralClimateCard extends HTMLElement {
             </svg>
             <span id="title-text">Smart Central Climate</span>
           </div>
-          <div class="version-badge" id="version-badge">v1.5.2 • LOCAL PUSH</div>
+          <div class="version-badge" id="version-badge">v1.5.3 • LOCAL PUSH</div>
         </div>
 
         <!-- TOP 2-COLUMN GRID (LEFT VERTICAL PLENUM STACK, RIGHT DIAL) -->
@@ -1250,6 +1250,15 @@ class SmartCentralClimateCard extends HTMLElement {
     window.addEventListener('pointerup', () => this._endDrag());
   }
 
+  _getMinGap() {
+    if (!this._hass || !this._config.entity) return 3.0;
+    const stateObj = this._hass.states[this._config.entity];
+    const attrs = stateObj ? stateObj.attributes || {} : {};
+    const cSwing = typeof attrs.cooling_swing === 'number' ? attrs.cooling_swing : 2.0;
+    const hSwing = typeof attrs.heating_swing === 'number' ? attrs.heating_swing : 1.0;
+    return Math.max(3.0, cSwing + hSwing);
+  }
+
   _startDrag(target, event) {
     this._dragging = target;
     event.preventDefault();
@@ -1272,11 +1281,12 @@ class SmartCentralClimateCard extends HTMLElement {
     const minT = this._config.min_temp || 60;
     const maxT = this._config.max_temp || 85;
 
+    const minGap = this._getMinGap();
     if (this._dragging === 'low') {
-      const newLow = Math.min(temp, this._tempHigh - 2);
+      const newLow = Math.min(temp, this._tempHigh - minGap);
       this._tempLow = Math.max(minT, newLow);
     } else if (this._dragging === 'high') {
-      const newHigh = Math.max(temp, this._tempLow + 2);
+      const newHigh = Math.max(temp, this._tempLow + minGap);
       this._tempHigh = Math.min(maxT, newHigh);
     } else if (this._dragging === 'single') {
       this._tempSingle = Math.max(minT, Math.min(maxT, temp));
@@ -1297,10 +1307,11 @@ class SmartCentralClimateCard extends HTMLElement {
     const minT = this._config.min_temp || 60;
     const maxT = this._config.max_temp || 85;
 
+    const minGap = this._getMinGap();
     if (target === 'low') {
-      this._tempLow = Math.max(minT, Math.min(this._tempHigh - 2, this._tempLow + delta));
+      this._tempLow = Math.max(minT, Math.min(this._tempHigh - minGap, this._tempLow + delta));
     } else if (target === 'high') {
-      this._tempHigh = Math.max(this._tempLow + 2, Math.min(maxT, this._tempHigh + delta));
+      this._tempHigh = Math.max(this._tempLow + minGap, Math.min(maxT, this._tempHigh + delta));
     } else if (target === 'single') {
       this._tempSingle = Math.max(minT, Math.min(maxT, this._tempSingle + delta));
     }
@@ -1382,7 +1393,7 @@ window.customCards.push({
 });
 
 console.info(
-  "%c SMART-CENTRAL-CLIMATE-CARD %c v1.5.2 ",
+  "%c SMART-CENTRAL-CLIMATE-CARD %c v1.5.3 ",
   "color: white; background: #0284c7; font-weight: 700; border-radius: 4px 0 0 4px; padding: 2px 6px;",
   "color: white; background: #0f172a; font-weight: 700; border-radius: 0 4px 4px 0; padding: 2px 6px;"
 );

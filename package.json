@@ -1,6 +1,6 @@
 {
   "name": "smart-central-climate-card",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "Companion Lovelace card for Smart Central Climate Home Assistant integration",
   "main": "smart-central-climate-card.js",
   "repository": {
