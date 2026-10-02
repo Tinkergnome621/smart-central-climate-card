@@ -1,22 +1,26 @@
 /**
- * Smart Central Climate Card (v1.5.0)
+ * Smart Central Climate Card (v1.5.2)
  * Custom Lovelace Card for Home Assistant
  * Designed for Central A/C and Heat Pump Dual-Setpoint Range Systems
  * 
  * Features:
  * - Dual-knob circular arc dial (Heat / Cool setpoints with emerald deadband)
+ * - Single-knob operation in Cool-only and Heat-only modes with working steppers & drag
  * - Icon-only HVAC status indicator (Green thermometer for Idle, Red flame for Heat, Blue snowflake for Cool)
- * - Vertical duct plenum probe stack on the left (Return Air, Delta-T Split, Supply Air)
- * - Minimalist Blower Fan toggle switch (icon + FAN ON / FAN OFF)
- * - Centered Target Range breakdown (House Average vs Wall Thermostat)
- * - Full mode (Heat/Cool, Cool, Heat, Off) and preset controls (Eco, Comfort, Sleep, Away, Vacation, Hold)
+ * - Vertical duct plenum probe stack on the left (Auto-hides if no plenum sensors are present)
+ * - True sensor readouts without dummy fallback numbers ("—" when unavailable)
+ * - Minimalist Blower Fan toggle switch (Auto-hides if no fan entity exists)
+ * - Non-destructive target range views preserving DOM structure across mode changes
+ * - Robust entity unavailable overlay with automatic live recovery
+ * - Dragging debounce preventing incoming state jitter
+ * - Light and Dark theme compatibility with CSS theme variables
  */
 
 class SmartCentralClimateCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
-    this._dragging = null; // 'low' | 'high'
+    this._dragging = null; // 'low' | 'high' | 'single'
     this._tempLow = 64;
     this._tempHigh = 74;
     this._tempSingle = 70;
@@ -47,12 +51,17 @@ class SmartCentralClimateCard extends HTMLElement {
     this._hass = hass;
     if (!this._config || !this._config.entity) return;
 
+    if (!this.shadowRoot.getElementById('card-root')) {
+      this._renderBase();
+    }
+
     const entityState = hass.states[this._config.entity];
-    if (!entityState) {
+    if (!entityState || entityState.state === 'unavailable' || entityState.state === 'unknown') {
       this._renderUnavailable();
       return;
     }
 
+    this._hideUnavailable();
     this._updateCard(entityState);
   }
 
@@ -61,30 +70,29 @@ class SmartCentralClimateCard extends HTMLElement {
   }
 
   /* -------------------------------------------------------------------------
-   * Base Shadow DOM Structure & CSS
+   * Base Shadow DOM Structure & CSS with Theme Variables
    * ------------------------------------------------------------------------- */
   _renderBase() {
-    if (this.shadowRoot.getElementById('card-root')) return;
-
     this.shadowRoot.innerHTML = `
       <style>
         :host {
           display: block;
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-          color: #e2e8f0;
+          font-family: var(--paper-font-body1_-_font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif);
+          color: var(--primary-text-color, #e2e8f0);
           box-sizing: border-box;
         }
         *, *::before, *::after {
           box-sizing: inherit;
         }
         ha-card {
-          background: #141721;
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 28px;
+          background: var(--ha-card-background, var(--card-background-color, #141721));
+          border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.08));
+          border-radius: var(--ha-card-border-radius, 28px);
           padding: 20px;
-          box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.7);
+          box-shadow: var(--ha-card-box-shadow, 0 20px 40px -15px rgba(0, 0, 0, 0.7));
           position: relative;
           overflow: hidden;
+          transition: background 0.3s ease, color 0.3s ease;
         }
         .header {
           display: flex;
@@ -95,7 +103,7 @@ class SmartCentralClimateCard extends HTMLElement {
         .header-title {
           font-size: 1.15rem;
           font-weight: 700;
-          color: #ffffff;
+          color: var(--primary-text-color, #ffffff);
           display: flex;
           align-items: center;
           gap: 8px;
@@ -103,14 +111,14 @@ class SmartCentralClimateCard extends HTMLElement {
         .header-title svg {
           width: 20px;
           height: 20px;
-          fill: #38bdf8;
+          fill: var(--primary-color, #38bdf8);
         }
         .version-badge {
           font-size: 0.7rem;
           font-weight: 700;
-          color: #94a3b8;
-          background: rgba(255, 255, 255, 0.05);
-          border: 1px solid rgba(255, 255, 255, 0.1);
+          color: var(--secondary-text-color, #94a3b8);
+          background: var(--secondary-background-color, rgba(255, 255, 255, 0.05));
+          border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.1));
           padding: 4px 10px;
           border-radius: 9999px;
           text-transform: uppercase;
@@ -123,6 +131,10 @@ class SmartCentralClimateCard extends HTMLElement {
           grid-template-columns: 190px 1fr;
           gap: 16px;
           align-items: center;
+          transition: grid-template-columns 0.3s ease;
+        }
+        .top-grid.no-plenum {
+          grid-template-columns: 1fr;
         }
         @media (max-width: 480px) {
           .top-grid {
@@ -137,8 +149,8 @@ class SmartCentralClimateCard extends HTMLElement {
           gap: 8px;
         }
         .plenum-box {
-          background: #191e2b;
-          border: 1px solid rgba(255, 255, 255, 0.06);
+          background: var(--secondary-background-color, #191e2b);
+          border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.06));
           border-radius: 14px;
           padding: 10px 12px;
           display: flex;
@@ -146,15 +158,15 @@ class SmartCentralClimateCard extends HTMLElement {
           gap: 2px;
         }
         .plenum-box.highlight {
-          border-color: rgba(16, 185, 129, 0.35);
-          background: rgba(16, 185, 129, 0.06);
+          border-color: rgba(16, 185, 129, 0.45);
+          background: rgba(16, 185, 129, 0.08);
         }
         .plenum-label {
           font-size: 0.65rem;
           font-weight: 700;
           text-transform: uppercase;
           letter-spacing: 0.06em;
-          color: #94a3b8;
+          color: var(--secondary-text-color, #94a3b8);
           display: flex;
           align-items: center;
           gap: 5px;
@@ -165,12 +177,12 @@ class SmartCentralClimateCard extends HTMLElement {
         .plenum-value {
           font-size: 1.05rem;
           font-weight: 800;
-          color: #f8fafc;
+          color: var(--primary-text-color, #f8fafc);
           font-variant-numeric: tabular-nums;
         }
         .plenum-sub {
           font-size: 0.65rem;
-          color: #64748b;
+          color: var(--secondary-text-color, #64748b);
         }
 
         /* Dial Container */
@@ -193,7 +205,7 @@ class SmartCentralClimateCard extends HTMLElement {
         }
         .dial-track {
           fill: none;
-          stroke: #222838;
+          stroke: var(--secondary-background-color, #222838);
           stroke-width: 12;
           stroke-linecap: round;
         }
@@ -295,11 +307,11 @@ class SmartCentralClimateCard extends HTMLElement {
           50% { box-shadow: 0 0 16px rgba(249, 115, 22, 0.7); }
         }
 
-        /* Large Current Temperature */
+        /* Current Temperature Display */
         .temp-display {
           font-size: 2.85rem;
           font-weight: 900;
-          color: #ffffff;
+          color: var(--primary-text-color, #ffffff);
           line-height: 1;
           letter-spacing: -0.03em;
           display: flex;
@@ -310,11 +322,11 @@ class SmartCentralClimateCard extends HTMLElement {
         .temp-unit {
           font-size: 1.35rem;
           font-weight: 400;
-          color: #94a3b8;
+          color: var(--secondary-text-color, #94a3b8);
           margin-left: 2px;
         }
 
-        /* Minimalist Fan Toggle Switch (Comment 2) */
+        /* Minimalist Fan Toggle Switch */
         .fan-toggle-wrap {
           pointer-events: auto;
           display: flex;
@@ -328,8 +340,8 @@ class SmartCentralClimateCard extends HTMLElement {
           width: 32px;
           height: 32px;
           border-radius: 50%;
-          background: #191e2b;
-          border: 1.5px solid #334155;
+          background: var(--secondary-background-color, #191e2b);
+          border: 1.5px solid var(--divider-color, #334155);
           display: flex;
           align-items: center;
           justify-content: center;
@@ -338,7 +350,7 @@ class SmartCentralClimateCard extends HTMLElement {
         .fan-icon-btn svg {
           width: 17px;
           height: 17px;
-          fill: #64748b;
+          fill: var(--secondary-text-color, #64748b);
           transition: transform 0.2s ease;
         }
         .fan-toggle-wrap.active .fan-icon-btn {
@@ -354,7 +366,7 @@ class SmartCentralClimateCard extends HTMLElement {
           font-size: 0.65rem;
           font-weight: 800;
           letter-spacing: 0.08em;
-          color: #64748b;
+          color: var(--secondary-text-color, #64748b);
           text-transform: uppercase;
         }
         .fan-toggle-wrap.active .fan-text-label {
@@ -366,11 +378,11 @@ class SmartCentralClimateCard extends HTMLElement {
           to { transform: rotate(360deg); }
         }
 
-        /* Target Range Box (Centered Below Dial & Stack - Comment 1) */
+        /* Target Range Box (Centered Below Dial & Stack) */
         .target-range-box {
           margin-top: 18px;
-          background: #161a25;
-          border: 1px solid rgba(255, 255, 255, 0.07);
+          background: var(--secondary-background-color, #161a25);
+          border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.07));
           border-radius: 16px;
           padding: 12px 16px;
           text-align: center;
@@ -383,7 +395,7 @@ class SmartCentralClimateCard extends HTMLElement {
         .target-range-headline {
           font-size: 0.95rem;
           font-weight: 800;
-          color: #ffffff;
+          color: var(--primary-text-color, #ffffff);
           display: flex;
           align-items: center;
           gap: 6px;
@@ -396,7 +408,7 @@ class SmartCentralClimateCard extends HTMLElement {
         }
         .target-range-subline {
           font-size: 0.75rem;
-          color: #94a3b8;
+          color: var(--secondary-text-color, #94a3b8);
           display: flex;
           align-items: center;
           gap: 10px;
@@ -404,7 +416,49 @@ class SmartCentralClimateCard extends HTMLElement {
           justify-content: center;
         }
         .target-range-subline strong {
-          color: #f1f5f9;
+          color: var(--primary-text-color, #f1f5f9);
+        }
+
+        /* Steppers Row */
+        .stepper-row {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 12px;
+          margin-top: 12px;
+        }
+        .stepper-group {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .btn-step {
+          width: 34px;
+          height: 34px;
+          border-radius: 10px;
+          background: var(--secondary-background-color, #1f2533);
+          border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.1));
+          color: var(--primary-text-color, #ffffff);
+          font-size: 1.1rem;
+          font-weight: 800;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.15s ease;
+        }
+        .btn-step:hover {
+          filter: brightness(1.2);
+        }
+        .btn-step:active {
+          transform: scale(0.92);
+        }
+        .stepper-label {
+          font-size: 0.7rem;
+          font-weight: 700;
+          text-transform: uppercase;
+          color: var(--secondary-text-color, #64748b);
+          padding: 0 4px;
         }
 
         /* Mode Selector Buttons */
@@ -415,11 +469,11 @@ class SmartCentralClimateCard extends HTMLElement {
           margin-top: 14px;
         }
         .btn-mode {
-          background: #191e2b;
-          border: 1px solid rgba(255, 255, 255, 0.07);
+          background: var(--secondary-background-color, #191e2b);
+          border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.07));
           border-radius: 12px;
           padding: 9px 4px;
-          color: #94a3b8;
+          color: var(--secondary-text-color, #94a3b8);
           font-size: 0.75rem;
           font-weight: 700;
           cursor: pointer;
@@ -430,8 +484,8 @@ class SmartCentralClimateCard extends HTMLElement {
           transition: all 0.2s ease;
         }
         .btn-mode:hover {
-          background: #22293b;
-          color: #ffffff;
+          filter: brightness(1.2);
+          color: var(--primary-text-color, #ffffff);
         }
         .btn-mode svg {
           width: 14px;
@@ -459,7 +513,7 @@ class SmartCentralClimateCard extends HTMLElement {
         .btn-mode.active-off {
           background: rgba(100, 116, 139, 0.2);
           border-color: #64748b;
-          color: #e2e8f0;
+          color: var(--primary-text-color, #e2e8f0);
         }
 
         /* Preset Buttons */
@@ -475,11 +529,11 @@ class SmartCentralClimateCard extends HTMLElement {
           }
         }
         .btn-preset {
-          background: #161a25;
-          border: 1px solid rgba(255, 255, 255, 0.06);
+          background: var(--secondary-background-color, #161a25);
+          border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.06));
           border-radius: 10px;
           padding: 8px 2px;
-          color: #94a3b8;
+          color: var(--secondary-text-color, #94a3b8);
           font-size: 0.7rem;
           font-weight: 700;
           cursor: pointer;
@@ -487,8 +541,8 @@ class SmartCentralClimateCard extends HTMLElement {
           transition: all 0.15s ease;
         }
         .btn-preset:hover {
-          background: #202636;
-          color: #ffffff;
+          filter: brightness(1.2);
+          color: var(--primary-text-color, #ffffff);
         }
         .btn-preset.active {
           background: rgba(16, 185, 129, 0.18);
@@ -497,36 +551,29 @@ class SmartCentralClimateCard extends HTMLElement {
           box-shadow: 0 0 8px rgba(16, 185, 129, 0.25);
         }
 
-        .stepper-row {
-          display: flex;
-          justify-content: center;
-          gap: 16px;
-          margin-top: 12px;
-        }
-        .btn-step {
-          width: 34px;
-          height: 34px;
-          border-radius: 10px;
-          background: #1f2533;
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          color: #ffffff;
-          font-size: 1.1rem;
-          font-weight: 800;
-          cursor: pointer;
-          display: flex;
+        /* Unavailable Overlay */
+        #unavailable-overlay {
+          position: absolute;
+          inset: 0;
+          background: rgba(20, 23, 33, 0.88);
+          backdrop-filter: blur(4px);
+          display: none;
+          flex-direction: column;
           align-items: center;
           justify-content: center;
-          transition: all 0.15s ease;
-        }
-        .btn-step:hover {
-          background: #2d3548;
-        }
-        .btn-step:active {
-          transform: scale(0.92);
+          z-index: 50;
+          border-radius: 28px;
+          padding: 20px;
+          text-align: center;
         }
       </style>
 
       <ha-card id="card-root">
+        <div id="unavailable-overlay">
+          <h3 style="color: #ef4444; margin: 0 0 8px 0;">Entity Unavailable</h3>
+          <p style="margin: 0; font-size: 0.85rem; color: #94a3b8;">Connecting to <strong id="unavail-entity-id">${this._config.entity}</strong>...</p>
+        </div>
+
         <!-- HEADER -->
         <div class="header">
           <div class="header-title">
@@ -535,29 +582,29 @@ class SmartCentralClimateCard extends HTMLElement {
             </svg>
             <span id="title-text">Smart Central Climate</span>
           </div>
-          <div class="version-badge" id="version-badge">v1.5.0 • LOCAL PUSH</div>
+          <div class="version-badge" id="version-badge">v1.5.2 • LOCAL PUSH</div>
         </div>
 
         <!-- TOP 2-COLUMN GRID (LEFT VERTICAL PLENUM STACK, RIGHT DIAL) -->
-        <div class="top-grid">
-          <!-- VERTICAL PLENUM PROBE STACK (Comment 0) -->
-          <div class="plenum-stack">
+        <div class="top-grid" id="top-grid">
+          <!-- VERTICAL PLENUM PROBE STACK (Auto-hides if no probes) -->
+          <div class="plenum-stack" id="plenum-stack">
             <!-- Box 1: Return Air -->
             <div class="plenum-box">
               <div class="plenum-label">
                 <span>📥</span> RETURN AIR (INPUT)
               </div>
-              <div class="plenum-value" id="val-return-air">68.2°F / 49% RH</div>
+              <div class="plenum-value" id="val-return-air">—</div>
               <div class="plenum-sub">Duct Return Intake</div>
             </div>
 
             <!-- Box 2: Delta-T Split -->
-            <div class="plenum-box highlight" id="box-delta-t">
-              <div class="plenum-label optimal" id="label-delta-t">
+            <div class="plenum-box" id="box-delta-t">
+              <div class="plenum-label" id="label-delta-t">
                 <span>⚡</span> DELTA-T SPLIT
               </div>
-              <div class="plenum-value" id="val-delta-t">15.8°F Drop (Optimal)</div>
-              <div class="plenum-sub">Expected: 14°F - 20°F</div>
+              <div class="plenum-value" id="val-delta-t">—</div>
+              <div class="plenum-sub" id="sub-delta-t">Expected: 14°F - 20°F</div>
             </div>
 
             <!-- Box 3: Supply Air -->
@@ -565,12 +612,12 @@ class SmartCentralClimateCard extends HTMLElement {
               <div class="plenum-label">
                 <span>📤</span> SUPPLY AIR (OUTPUT)
               </div>
-              <div class="plenum-value" id="val-supply-air">52.4°F / 65% RH</div>
+              <div class="plenum-value" id="val-supply-air">—</div>
               <div class="plenum-sub">Plenum Supply Duct</div>
             </div>
           </div>
 
-          <!-- CIRCULAR DUAL-SLIDER DIAL -->
+          <!-- CIRCULAR ARC DIAL -->
           <div class="dial-container" id="dial-wrap">
             <svg class="dial-svg" viewBox="0 0 240 240" id="dial-svg">
               <defs>
@@ -599,59 +646,95 @@ class SmartCentralClimateCard extends HTMLElement {
                 <circle id="knob-cool-outer" r="14" fill="#141721" stroke="#0ea5e9" stroke-width="3.5" />
                 <circle r="4.5" fill="#ffffff" />
               </g>
+
+              <!-- Single Setpoint Knob (Used for Cool-only or Heat-only) -->
+              <g class="dial-knob" id="knob-single" filter="url(#shadow-knob)" style="display: none;">
+                <circle id="knob-single-outer" r="14" fill="#141721" stroke="#0ea5e9" stroke-width="3.5" />
+                <circle r="4.5" fill="#ffffff" />
+              </g>
             </svg>
 
             <!-- Centered Overlay (Icon, Temp, Fan) -->
             <div class="dial-center-overlay">
-              <!-- Top: Status Indicator (Icon-Only, Comment 7/8) -->
+              <!-- Top: Status Indicator (Icon-Only) -->
               <div class="status-icon-circle status-idle" id="status-icon-circle" title="System Status">
                 <svg id="status-icon-svg" viewBox="0 0 24 24">
-                  <!-- Default: Green thermometer for Idle -->
                   <path d="M15 13V5a3 3 0 0 0-6 0v8a5 5 0 1 0 6 0m-3-10a1 1 0 0 1 1 1v7.2a2 2 0 0 1 1 1.8 3 3 0 1 1-4-2.8V4a1 1 0 0 1 2 0"/>
                 </svg>
               </div>
 
               <!-- Center: Large Current Temp -->
               <div class="temp-display">
-                <span id="current-temp-val">68.4</span>
+                <span id="current-temp-val">—</span>
                 <span class="temp-unit">°F</span>
               </div>
 
-              <!-- Bottom: Minimal Fan Control (Comment 2) -->
-              <div class="fan-toggle-wrap active" id="fan-toggle-btn" title="Toggle Blower Fan">
+              <!-- Bottom: Minimal Fan Control -->
+              <div class="fan-toggle-wrap" id="fan-toggle-btn" title="Toggle Blower Fan" style="display: none;">
                 <div class="fan-icon-btn">
                   <svg viewBox="0 0 24 24">
                     <path d="M12 11a1 1 0 1 0 1 1 1 1 0 0 0-1-1m0-9a4 4 0 0 0-4 4c0 1.9 1.3 3.5 3 3.9V4a1 1 0 0 1 2 0v5.9c1.7-.4 3-2 3-3.9a4 4 0 0 0-4-4m-9 14a4 4 0 0 0 4 4c1.9 0 3.5-1.3 3.9-3H5a1 1 0 0 1 0-2h5.9c-.4-1.7-2-3-3.9-3a4 4 0 0 0-4 4m18-4a4 4 0 0 0-4-4c-1.9 0-3.5 1.3-3.9 3H19a1 1 0 0 1 0 2h-5.9c.4 1.7 2 3 3.9 3a4 4 0 0 0 4-4m-9 5a4 4 0 0 0 4-4c0-1.9-1.3-3.5-3-3.9V19a1 1 0 0 1-2 0v-5.9c-1.7.4-3 2-3 3.9a4 4 0 0 0 4 4"/>
                   </svg>
                 </div>
-                <div class="fan-text-label" id="fan-text-label">FAN ON</div>
+                <div class="fan-text-label" id="fan-text-label">FAN OFF</div>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- TARGET RANGE SECTION (Justified Center Below Dial - Comment 1) -->
+        <!-- TARGET RANGE SECTION (Non-destructive DOM elements) -->
         <div class="target-range-box">
-          <div class="target-range-headline" id="target-range-line">
+          <!-- View 1: Heat/Cool Range -->
+          <div class="target-range-headline" id="range-headline-heat-cool">
             <span>Target Range:</span>
             <span class="target-heat-tag" id="target-heat-label">64°F (Heat)</span>
             <span>—</span>
             <span class="target-cool-tag" id="target-cool-label">74°F (Cool)</span>
           </div>
-          <div class="target-range-subline">
-            <span>Average House: <strong id="sub-avg-temp">68.4°F / 48% RH</strong></span>
+
+          <!-- View 2: Single Setpoint (Cool only or Heat only) -->
+          <div class="target-range-headline" id="range-headline-single" style="display: none;">
+            <span>Target Setpoint:</span>
+            <span id="target-single-label" class="target-cool-tag">72°F</span>
+          </div>
+
+          <!-- View 3: System Off -->
+          <div class="target-range-headline" id="range-headline-off" style="display: none;">
+            <span>System Mode:</span>
+            <span style="color: var(--secondary-text-color, #94a3b8);">OFF</span>
+          </div>
+
+          <!-- Subline: House Average & Wall Breakdown -->
+          <div class="target-range-subline" id="target-range-subline">
+            <span>Average House: <strong id="sub-avg-temp">—</strong></span>
             <span>•</span>
-            <span>Wall Thermostat: <strong id="sub-wall-temp">69.0°F / 45% RH</strong></span>
+            <span>Wall Thermostat: <strong id="sub-wall-temp">—</strong></span>
           </div>
         </div>
 
         <!-- STEPPERS FOR PRECISE TARGET ADJUSTMENT -->
-        <div class="stepper-row">
-          <button class="btn-step" id="btn-minus-low" title="Lower Heat Target">−</button>
-          <button class="btn-step" id="btn-plus-low" title="Raise Heat Target">+</button>
-          <span style="font-size: 0.75rem; color: #64748b; align-self: center;">Heat / Cool Steppers</span>
-          <button class="btn-step" id="btn-minus-high" title="Lower Cool Target">−</button>
-          <button class="btn-step" id="btn-plus-high" title="Raise Cool Target">+</button>
+        <!-- Dual Steppers (Heat/Cool Mode) -->
+        <div class="stepper-row" id="stepper-row-dual">
+          <div class="stepper-group">
+            <button class="btn-step" id="btn-minus-low" title="Lower Heat Target">−</button>
+            <span class="stepper-label target-heat-tag">Heat</span>
+            <button class="btn-step" id="btn-plus-low" title="Raise Heat Target">+</button>
+          </div>
+          <span style="font-size: 0.75rem; color: var(--secondary-text-color, #64748b);">|</span>
+          <div class="stepper-group">
+            <button class="btn-step" id="btn-minus-high" title="Lower Cool Target">−</button>
+            <span class="stepper-label target-cool-tag">Cool</span>
+            <button class="btn-step" id="btn-plus-high" title="Raise Cool Target">+</button>
+          </div>
+        </div>
+
+        <!-- Single Steppers (Cool or Heat Mode) -->
+        <div class="stepper-row" id="stepper-row-single" style="display: none;">
+          <div class="stepper-group">
+            <button class="btn-step" id="btn-minus-single" title="Lower Target">−</button>
+            <span class="stepper-label" id="label-step-single">Target</span>
+            <button class="btn-step" id="btn-plus-single" title="Raise Target">+</button>
+          </div>
         </div>
 
         <!-- MODE SELECTOR BUTTONS -->
@@ -691,12 +774,19 @@ class SmartCentralClimateCard extends HTMLElement {
   }
 
   _renderUnavailable() {
-    this.shadowRoot.innerHTML = `
-      <ha-card style="background: #141721; padding: 24px; border-radius: 24px; text-align: center; color: #94a3b8;">
-        <h3 style="color: #ef4444; margin: 0 0 8px 0;">Entity Unavailable</h3>
-        <p style="margin: 0; font-size: 0.9rem;">Could not find state for <strong>${this._config.entity}</strong>. Check Home Assistant entity ID.</p>
-      </ha-card>
-    `;
+    const overlay = this.shadowRoot.getElementById('unavailable-overlay');
+    if (overlay) {
+      overlay.style.display = 'flex';
+      const entityLabel = this.shadowRoot.getElementById('unavail-entity-id');
+      if (entityLabel) entityLabel.textContent = this._config.entity;
+    }
+  }
+
+  _hideUnavailable() {
+    const overlay = this.shadowRoot.getElementById('unavailable-overlay');
+    if (overlay) {
+      overlay.style.display = 'none';
+    }
   }
 
   /* -------------------------------------------------------------------------
@@ -767,71 +857,107 @@ class SmartCentralClimateCard extends HTMLElement {
     if (titleEl) titleEl.textContent = this._config.name || attrs.friendly_name || "Smart Central Climate";
 
     // Current Room Temperature
-    const currentTemp = attrs.current_temperature !== undefined ? attrs.current_temperature : stateObj.state;
+    const currentTemp = attrs.current_temperature !== undefined ? attrs.current_temperature : null;
     const tempValEl = root.getElementById('current-temp-val');
-    if (tempValEl) tempValEl.textContent = (typeof currentTemp === 'number') ? currentTemp.toFixed(1) : (currentTemp || '--');
+    if (tempValEl) {
+      tempValEl.textContent = (typeof currentTemp === 'number') ? currentTemp.toFixed(1) : (currentTemp ? currentTemp : '—');
+    }
 
-    // Temperatures
     const minT = this._config.min_temp || 60;
     const maxT = this._config.max_temp || 85;
-    this._tempLow = attrs.target_temp_low !== undefined ? attrs.target_temp_low : (attrs.target_temperature_low || 64);
-    this._tempHigh = attrs.target_temp_high !== undefined ? attrs.target_temp_high : (attrs.target_temperature_high || 74);
-    this._tempSingle = attrs.temperature !== undefined ? attrs.temperature : 70;
-
     const hvacMode = stateObj.state || 'off';
     const isHeatCool = hvacMode === 'heat_cool';
 
-    // Update Arc paths and Knob Positions
-    const angleHeat = this._tempToAngle(isHeatCool ? this._tempLow : (hvacMode === 'heat' ? this._tempSingle : minT));
-    const angleCool = this._tempToAngle(isHeatCool ? this._tempHigh : (hvacMode === 'cool' ? this._tempSingle : maxT));
+    // Only sync setpoints from attributes if user is not currently dragging knobs
+    if (!this._dragging) {
+      this._tempLow = attrs.target_temp_low !== undefined ? attrs.target_temp_low : (attrs.target_temperature_low || 64);
+      this._tempHigh = attrs.target_temp_high !== undefined ? attrs.target_temp_high : (attrs.target_temperature_high || 74);
+      this._tempSingle = attrs.temperature !== undefined ? attrs.temperature : (isHeatCool ? 70 : (hvacMode === 'heat' ? this._tempLow : this._tempHigh));
+    }
 
+    // Update Arc paths and Knob Positions
     const pathHeat = root.getElementById('path-arc-heat');
     const pathDeadband = root.getElementById('path-arc-deadband');
     const pathCool = root.getElementById('path-arc-cool');
     const knobHeat = root.getElementById('knob-heat');
     const knobCool = root.getElementById('knob-cool');
+    const knobSingle = root.getElementById('knob-single');
+    const knobSingleOuter = root.getElementById('knob-single-outer');
 
-    if (pathHeat) {
-      if (isHeatCool || hvacMode === 'heat') {
+    if (isHeatCool) {
+      const angleHeat = this._tempToAngle(this._tempLow);
+      const angleCool = this._tempToAngle(this._tempHigh);
+
+      if (pathHeat) {
         pathHeat.setAttribute('d', this._describeArc(this._cx, this._cy, this._radius, this._startAngle, angleHeat));
         pathHeat.style.display = 'block';
-      } else {
-        pathHeat.style.display = 'none';
       }
-    }
-
-    if (pathDeadband) {
-      if (isHeatCool && angleCool > angleHeat) {
+      if (pathDeadband && angleCool > angleHeat) {
         pathDeadband.setAttribute('d', this._describeArc(this._cx, this._cy, this._radius, angleHeat, angleCool));
         pathDeadband.style.display = 'block';
-      } else {
-        pathDeadband.style.display = 'none';
       }
-    }
-
-    if (pathCool) {
-      if (isHeatCool || hvacMode === 'cool') {
+      if (pathCool) {
         pathCool.setAttribute('d', this._describeArc(this._cx, this._cy, this._radius, angleCool, this._endAngle));
         pathCool.style.display = 'block';
-      } else {
-        pathCool.style.display = 'none';
       }
+
+      if (knobHeat) {
+        const posH = this._polarToCartesian(this._cx, this._cy, this._radius, angleHeat);
+        knobHeat.setAttribute('transform', `translate(${posH.x}, ${posH.y})`);
+        knobHeat.style.display = 'block';
+      }
+      if (knobCool) {
+        const posC = this._polarToCartesian(this._cx, this._cy, this._radius, angleCool);
+        knobCool.setAttribute('transform', `translate(${posC.x}, ${posC.y})`);
+        knobCool.style.display = 'block';
+      }
+      if (knobSingle) knobSingle.style.display = 'none';
+
+    } else if (hvacMode === 'cool') {
+      const angleSingle = this._tempToAngle(this._tempSingle);
+      if (pathHeat) pathHeat.style.display = 'none';
+      if (pathDeadband) pathDeadband.style.display = 'none';
+      if (pathCool) {
+        pathCool.setAttribute('d', this._describeArc(this._cx, this._cy, this._radius, angleSingle, this._endAngle));
+        pathCool.style.display = 'block';
+      }
+      if (knobHeat) knobHeat.style.display = 'none';
+      if (knobCool) knobCool.style.display = 'none';
+      if (knobSingle && knobSingleOuter) {
+        const posS = this._polarToCartesian(this._cx, this._cy, this._radius, angleSingle);
+        knobSingle.setAttribute('transform', `translate(${posS.x}, ${posS.y})`);
+        knobSingleOuter.setAttribute('stroke', '#0ea5e9');
+        knobSingle.style.display = 'block';
+      }
+
+    } else if (hvacMode === 'heat') {
+      const angleSingle = this._tempToAngle(this._tempSingle);
+      if (pathHeat) {
+        pathHeat.setAttribute('d', this._describeArc(this._cx, this._cy, this._radius, this._startAngle, angleSingle));
+        pathHeat.style.display = 'block';
+      }
+      if (pathDeadband) pathDeadband.style.display = 'none';
+      if (pathCool) pathCool.style.display = 'none';
+      if (knobHeat) knobHeat.style.display = 'none';
+      if (knobCool) knobCool.style.display = 'none';
+      if (knobSingle && knobSingleOuter) {
+        const posS = this._polarToCartesian(this._cx, this._cy, this._radius, angleSingle);
+        knobSingle.setAttribute('transform', `translate(${posS.x}, ${posS.y})`);
+        knobSingleOuter.setAttribute('stroke', '#f97316');
+        knobSingle.style.display = 'block';
+      }
+
+    } else {
+      // Off
+      if (pathHeat) pathHeat.style.display = 'none';
+      if (pathDeadband) pathDeadband.style.display = 'none';
+      if (pathCool) pathCool.style.display = 'none';
+      if (knobHeat) knobHeat.style.display = 'none';
+      if (knobCool) knobCool.style.display = 'none';
+      if (knobSingle) knobSingle.style.display = 'none';
     }
 
-    // Place Knobs
-    if (knobHeat) {
-      const posH = this._polarToCartesian(this._cx, this._cy, this._radius, angleHeat);
-      knobHeat.setAttribute('transform', `translate(${posH.x}, ${posH.y})`);
-      knobHeat.style.display = (isHeatCool || hvacMode === 'heat') ? 'block' : 'none';
-    }
-
-    if (knobCool) {
-      const posC = this._polarToCartesian(this._cx, this._cy, this._radius, angleCool);
-      knobCool.setAttribute('transform', `translate(${posC.x}, ${posC.y})`);
-      knobCool.style.display = (isHeatCool || hvacMode === 'cool') ? 'block' : 'none';
-    }
-
-    // Status Indicator Icon (Icon-Only, Comment 7/8)
+    // Status Indicator Icon (Icon-Only)
     const statusWrap = root.getElementById('status-icon-circle');
     const statusSvg = root.getElementById('status-icon-svg');
     const hvacAction = attrs.hvac_action || (hvacMode === 'off' ? 'off' : 'idle');
@@ -848,101 +974,187 @@ class SmartCentralClimateCard extends HTMLElement {
         statusWrap.classList.add('status-off');
         statusSvg.innerHTML = `<path d="M16.56 5.44l-1.45 1.45A5.969 5.969 0 0 1 18 12c0 3.31-2.69 6-6 6s-6-2.69-6-6c0-2.12 1.1-3.99 2.89-5.11L7.44 5.44A7.96 7.96 0 0 0 4 12c0 4.42 3.58 8 8 8s8-3.58 8-8c0-2.55-1.19-4.83-3.44-6.56M13 3h-2v10h2V3z"/>`;
       } else {
-        // Idle (Green thermometer from approved iconography)
+        // Idle (Green thermometer)
         statusWrap.classList.add('status-idle');
         statusSvg.innerHTML = `<path d="M15 13V5a3 3 0 0 0-6 0v8a5 5 0 1 0 6 0m-3-10a1 1 0 0 1 1 1v7.2a2 2 0 0 1 1 1.8 3 3 0 1 1-4-2.8V4a1 1 0 0 1 2 0"/>`;
       }
     }
 
-    // Fan Status (Comment 2: Minimalist Fan icon + FAN ON/OFF)
+    // Fan Status & Visibility (Hide if no fan entity configured)
     const fanWrap = root.getElementById('fan-toggle-btn');
     const fanLabel = root.getElementById('fan-text-label');
+    const hasFanEntity = Boolean(attrs.fan_entity || (attrs.fan_modes && attrs.fan_modes.length > 0) || this._config.fan_switch);
+
     const fanState = attrs.fan_state || attrs.fan_mode || 'off';
     const isFanOn = fanState === 'on' || fanState === 'low' || fanState === 'medium' || fanState === 'high';
 
     if (fanWrap && fanLabel) {
-      if (isFanOn) {
-        fanWrap.classList.add('active');
-        fanLabel.textContent = 'FAN ON';
+      if (!hasFanEntity) {
+        fanWrap.style.display = 'none';
       } else {
-        fanWrap.classList.remove('active');
-        fanLabel.textContent = 'FAN OFF';
+        fanWrap.style.display = 'flex';
+        if (isFanOn) {
+          fanWrap.classList.add('active');
+          fanLabel.textContent = 'FAN ON';
+        } else {
+          fanWrap.classList.remove('active');
+          fanLabel.textContent = 'FAN OFF';
+        }
       }
     }
 
-    // Duct Plenum Probes (Left Stack - Comment 0)
-    const valReturnAir = root.getElementById('val-return-air');
+    // Duct Plenum Probes (Auto-hide if no probes configured, show "—" when missing)
     const rTemp = attrs.return_air_temperature;
     const rHum = attrs.return_air_humidity;
+    const sTemp = attrs.supply_air_temperature;
+    const sHum = attrs.supply_air_humidity;
+    const deltaT = attrs.delta_t;
+
+    const hasPlenum = (rTemp !== undefined && rTemp !== null) ||
+                      (sTemp !== undefined && sTemp !== null) ||
+                      Boolean(attrs.return_temp_sensor || attrs.supply_temp_sensor);
+
+    const plenumStack = root.getElementById('plenum-stack');
+    const topGrid = root.getElementById('top-grid');
+    if (plenumStack && topGrid) {
+      if (!hasPlenum) {
+        plenumStack.style.display = 'none';
+        topGrid.classList.add('no-plenum');
+      } else {
+        plenumStack.style.display = 'flex';
+        topGrid.classList.remove('no-plenum');
+      }
+    }
+
+    const valReturnAir = root.getElementById('val-return-air');
     if (valReturnAir) {
       if (rTemp !== undefined && rTemp !== null) {
-        valReturnAir.textContent = `${Number(rTemp).toFixed(1)}°F ${rHum ? '/ ' + Number(rHum).toFixed(0) + '% RH' : ''}`;
+        valReturnAir.textContent = `${Number(rTemp).toFixed(1)}°F${(rHum !== undefined && rHum !== null) ? ' / ' + Number(rHum).toFixed(0) + '% RH' : ''}`;
       } else {
-        valReturnAir.textContent = `68.2°F / 49% RH`; // Graceful fallback
+        valReturnAir.textContent = '—';
       }
     }
 
     const valSupplyAir = root.getElementById('val-supply-air');
-    const sTemp = attrs.supply_air_temperature;
-    const sHum = attrs.supply_air_humidity;
     if (valSupplyAir) {
       if (sTemp !== undefined && sTemp !== null) {
-        valSupplyAir.textContent = `${Number(sTemp).toFixed(1)}°F ${sHum ? '/ ' + Number(sHum).toFixed(0) + '% RH' : ''}`;
+        valSupplyAir.textContent = `${Number(sTemp).toFixed(1)}°F${(sHum !== undefined && sHum !== null) ? ' / ' + Number(sHum).toFixed(0) + '% RH' : ''}`;
       } else {
-        valSupplyAir.textContent = `52.4°F / 65% RH`; // Graceful fallback
+        valSupplyAir.textContent = '—';
       }
     }
 
     const valDeltaT = root.getElementById('val-delta-t');
     const boxDeltaT = root.getElementById('box-delta-t');
     const labelDeltaT = root.getElementById('label-delta-t');
-    const deltaT = attrs.delta_t;
+    const subDeltaT = root.getElementById('sub-delta-t');
+
     if (valDeltaT) {
       if (deltaT !== undefined && deltaT !== null) {
         const absDelta = Math.abs(deltaT).toFixed(1);
-        const isOptimal = absDelta >= 14 && absDelta <= 20;
-        valDeltaT.textContent = `${absDelta}°F ${deltaT < 0 ? 'Drop' : 'Rise'} ${isOptimal ? '(Optimal)' : ''}`;
+        const isCooling = hvacAction === 'cooling';
+        const isHeating = hvacAction === 'heating';
+
+        // Delta-T Optimal Check: Mode and Blower aware!
+        const isOptimalCool = isCooling && isFanOn && absDelta >= 14.0 && absDelta <= 20.0;
+        const isOptimalHeat = isHeating && isFanOn && absDelta >= 20.0 && absDelta <= 45.0;
+        const isOptimal = isOptimalCool || isOptimalHeat;
+
+        const dirStr = deltaT < 0 ? 'Drop' : 'Rise';
+        valDeltaT.textContent = `${absDelta}°F ${dirStr}${isOptimal ? ' (Optimal)' : ''}`;
+
+        if (subDeltaT) {
+          subDeltaT.textContent = isHeating ? 'Expected: 20°F - 45°F Rise' : 'Expected: 14°F - 20°F Drop';
+        }
         if (boxDeltaT) boxDeltaT.className = `plenum-box ${isOptimal ? 'highlight' : ''}`;
         if (labelDeltaT) labelDeltaT.className = `plenum-label ${isOptimal ? 'optimal' : ''}`;
       } else {
-        valDeltaT.textContent = `15.8°F Drop (Optimal)`;
+        valDeltaT.textContent = '—';
+        if (boxDeltaT) boxDeltaT.className = 'plenum-box';
+        if (labelDeltaT) labelDeltaT.className = 'plenum-label';
       }
     }
 
-    // Target Range Headline (Centered Below Dial - Comment 1)
-    const targetLine = root.getElementById('target-range-line');
+    // Target Range Headline Views (Non-destructive DOM switching)
+    const viewHeatCool = root.getElementById('range-headline-heat-cool');
+    const viewSingle = root.getElementById('range-headline-single');
+    const viewOff = root.getElementById('range-headline-off');
     const heatLabel = root.getElementById('target-heat-label');
     const coolLabel = root.getElementById('target-cool-label');
-    if (targetLine) {
+    const singleLabel = root.getElementById('target-single-label');
+
+    if (viewHeatCool && viewSingle && viewOff) {
       if (isHeatCool) {
         if (heatLabel) heatLabel.textContent = `${this._tempLow.toFixed(0)}°F (Heat)`;
         if (coolLabel) coolLabel.textContent = `${this._tempHigh.toFixed(0)}°F (Cool)`;
-        targetLine.style.display = 'flex';
+        viewHeatCool.style.display = 'flex';
+        viewSingle.style.display = 'none';
+        viewOff.style.display = 'none';
       } else if (hvacMode === 'cool') {
-        targetLine.innerHTML = `<span>Target Setpoint:</span> <span class="target-cool-tag">${this._tempSingle.toFixed(0)}°F (Cool)</span>`;
+        if (singleLabel) {
+          singleLabel.textContent = `${this._tempSingle.toFixed(0)}°F (Cool)`;
+          singleLabel.className = 'target-cool-tag';
+        }
+        viewHeatCool.style.display = 'none';
+        viewSingle.style.display = 'flex';
+        viewOff.style.display = 'none';
       } else if (hvacMode === 'heat') {
-        targetLine.innerHTML = `<span>Target Setpoint:</span> <span class="target-heat-tag">${this._tempSingle.toFixed(0)}°F (Heat)</span>`;
+        if (singleLabel) {
+          singleLabel.textContent = `${this._tempSingle.toFixed(0)}°F (Heat)`;
+          singleLabel.className = 'target-heat-tag';
+        }
+        viewHeatCool.style.display = 'none';
+        viewSingle.style.display = 'flex';
+        viewOff.style.display = 'none';
       } else {
-        targetLine.innerHTML = `<span>System Mode:</span> <span style="color:#94a3b8">OFF</span>`;
+        viewHeatCool.style.display = 'none';
+        viewSingle.style.display = 'none';
+        viewOff.style.display = 'flex';
       }
     }
 
-    // Average House & Wall Thermostat Breakdown (Comment 7)
+    // Steppers Row Visibility & Adaptability
+    const dualSteppers = root.getElementById('stepper-row-dual');
+    const singleSteppers = root.getElementById('stepper-row-single');
+    const labelStepSingle = root.getElementById('label-step-single');
+
+    if (dualSteppers && singleSteppers) {
+      if (isHeatCool) {
+        dualSteppers.style.display = 'flex';
+        singleSteppers.style.display = 'none';
+      } else if (hvacMode === 'cool' || hvacMode === 'heat') {
+        dualSteppers.style.display = 'none';
+        singleSteppers.style.display = 'flex';
+        if (labelStepSingle) {
+          labelStepSingle.textContent = hvacMode === 'heat' ? 'Heat' : 'Cool';
+          labelStepSingle.className = hvacMode === 'heat' ? 'stepper-label target-heat-tag' : 'stepper-label target-cool-tag';
+        }
+      } else {
+        dualSteppers.style.display = 'none';
+        singleSteppers.style.display = 'none';
+      }
+    }
+
+    // Average House & Wall Thermostat Breakdown (True data, no hardcoded dummy fallbacks)
     const subAvg = root.getElementById('sub-avg-temp');
     const subWall = root.getElementById('sub-wall-temp');
     const inHum = attrs.indoor_humidity;
     if (subAvg) {
-      const avgStr = (typeof currentTemp === 'number') ? currentTemp.toFixed(1) : currentTemp;
-      subAvg.textContent = `${avgStr}°F ${inHum ? '/ ' + inHum + '% RH' : '/ 48% RH'}`;
+      if (currentTemp !== null && currentTemp !== undefined) {
+        const avgStr = (typeof currentTemp === 'number') ? `${currentTemp.toFixed(1)}°F` : `${currentTemp}°F`;
+        subAvg.textContent = (inHum !== null && inHum !== undefined) ? `${avgStr} / ${inHum}% RH` : avgStr;
+      } else {
+        subAvg.textContent = '—';
+      }
     }
 
     if (subWall) {
       const wTemp = attrs.wall_thermostat_temperature;
       const wHum = attrs.wall_thermostat_humidity;
       if (wTemp !== undefined && wTemp !== null) {
-        subWall.textContent = `${Number(wTemp).toFixed(1)}°F ${wHum ? '/ ' + wHum + '% RH' : '/ 45% RH'}`;
+        subWall.textContent = `${Number(wTemp).toFixed(1)}°F${(wHum !== undefined && wHum !== null) ? ' / ' + wHum + '% RH' : ''}`;
       } else {
-        subWall.textContent = `69.0°F / 45% RH`;
+        subWall.textContent = '—';
       }
     }
 
@@ -971,7 +1183,7 @@ class SmartCentralClimateCard extends HTMLElement {
   }
 
   /* -------------------------------------------------------------------------
-   * Interactive Event Listeners (Dragging, Clicks, Service Calls)
+   * Interactive Event Listeners (Dragging, Steppers, Service Calls)
    * ------------------------------------------------------------------------- */
   _bindEvents() {
     const root = this.shadowRoot;
@@ -1001,7 +1213,7 @@ class SmartCentralClimateCard extends HTMLElement {
       });
     });
 
-    // Steppers
+    // Dual Mode Steppers
     const btnMinusLow = root.getElementById('btn-minus-low');
     const btnPlusLow = root.getElementById('btn-plus-low');
     const btnMinusHigh = root.getElementById('btn-minus-high');
@@ -1012,16 +1224,26 @@ class SmartCentralClimateCard extends HTMLElement {
     if (btnMinusHigh) btnMinusHigh.addEventListener('click', () => this._stepTemp('high', -1));
     if (btnPlusHigh) btnPlusHigh.addEventListener('click', () => this._stepTemp('high', 1));
 
+    // Single Mode Steppers (Works in Cool and Heat mode)
+    const btnMinusSingle = root.getElementById('btn-minus-single');
+    const btnPlusSingle = root.getElementById('btn-plus-single');
+
+    if (btnMinusSingle) btnMinusSingle.addEventListener('click', () => this._stepTemp('single', -1));
+    if (btnPlusSingle) btnPlusSingle.addEventListener('click', () => this._stepTemp('single', 1));
+
     // Knob Dragging Interaction
     const knobHeat = root.getElementById('knob-heat');
     const knobCool = root.getElementById('knob-cool');
-    const dialSvg = root.getElementById('dial-svg');
+    const knobSingle = root.getElementById('knob-single');
 
     if (knobHeat) {
       knobHeat.addEventListener('pointerdown', (e) => this._startDrag('low', e));
     }
     if (knobCool) {
       knobCool.addEventListener('pointerdown', (e) => this._startDrag('high', e));
+    }
+    if (knobSingle) {
+      knobSingle.addEventListener('pointerdown', (e) => this._startDrag('single', e));
     }
 
     window.addEventListener('pointermove', (e) => this._onDrag(e));
@@ -1042,7 +1264,6 @@ class SmartCentralClimateCard extends HTMLElement {
     const x = event.clientX - rect.left - (rect.width / 2);
     const y = event.clientY - rect.top - (rect.height / 2);
 
-    // Calculate angle in degrees
     let rad = Math.atan2(y, x);
     let deg = (rad * 180 / Math.PI) + 90;
     if (deg < 0) deg += 360;
@@ -1057,6 +1278,8 @@ class SmartCentralClimateCard extends HTMLElement {
     } else if (this._dragging === 'high') {
       const newHigh = Math.max(temp, this._tempLow + 2);
       this._tempHigh = Math.min(maxT, newHigh);
+    } else if (this._dragging === 'single') {
+      this._tempSingle = Math.max(minT, Math.min(maxT, temp));
     }
 
     // Instant local visual feedback
@@ -1073,11 +1296,15 @@ class SmartCentralClimateCard extends HTMLElement {
   _stepTemp(target, delta) {
     const minT = this._config.min_temp || 60;
     const maxT = this._config.max_temp || 85;
+
     if (target === 'low') {
       this._tempLow = Math.max(minT, Math.min(this._tempHigh - 2, this._tempLow + delta));
-    } else {
+    } else if (target === 'high') {
       this._tempHigh = Math.max(this._tempLow + 2, Math.min(maxT, this._tempHigh + delta));
+    } else if (target === 'single') {
+      this._tempSingle = Math.max(minT, Math.min(maxT, this._tempSingle + delta));
     }
+
     const stateObj = this._hass.states[this._config.entity];
     if (stateObj) this._updateCard(stateObj);
     this._commitTemperature();
@@ -1151,11 +1378,11 @@ window.customCards.push({
   name: "Smart Central Climate Card",
   description: "Redesigned circular dual-slider thermostat with plenum diagnostics, Delta-T split, and fan control",
   preview: true,
-  documentationURL: "https://github.com/Tinkergnome621/smart_central_climate"
+  documentationURL: "https://github.com/Tinkergnome621/smart-central-climate-card"
 });
 
 console.info(
-  "%c SMART-CENTRAL-CLIMATE-CARD %c v1.5.0 ",
+  "%c SMART-CENTRAL-CLIMATE-CARD %c v1.5.2 ",
   "color: white; background: #0284c7; font-weight: 700; border-radius: 4px 0 0 4px; padding: 2px 6px;",
   "color: white; background: #0f172a; font-weight: 700; border-radius: 0 4px 4px 0; padding: 2px 6px;"
 );
