@@ -1,5 +1,5 @@
 /**
- * Smart Central Climate Card (v1.5.3)
+ * Smart Central Climate Card (v1.5.4)
  * Custom Lovelace Card for Home Assistant
  * Designed for Central A/C and Heat Pump Dual-Setpoint Range Systems
  * 
@@ -582,7 +582,7 @@ class SmartCentralClimateCard extends HTMLElement {
             </svg>
             <span id="title-text">Smart Central Climate</span>
           </div>
-          <div class="version-badge" id="version-badge">v1.5.3 • LOCAL PUSH</div>
+          <div class="version-badge" id="version-badge">v1.5.4 • LOCAL PUSH</div>
         </div>
 
         <!-- TOP 2-COLUMN GRID (LEFT VERTICAL PLENUM STACK, RIGHT DIAL) -->
@@ -1393,7 +1393,7 @@ window.customCards.push({
 });
 
 console.info(
-  "%c SMART-CENTRAL-CLIMATE-CARD %c v1.5.3 ",
+  "%c SMART-CENTRAL-CLIMATE-CARD %c v1.5.4 ",
   "color: white; background: #0284c7; font-weight: 700; border-radius: 4px 0 0 4px; padding: 2px 6px;",
   "color: white; background: #0f172a; font-weight: 700; border-radius: 0 4px 4px 0; padding: 2px 6px;"
 );
